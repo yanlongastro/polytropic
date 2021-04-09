@@ -89,10 +89,10 @@ def theta_interp(sol, imax, x1):
     imax += 10
     if imax >= len(sol.t):
         imax = len(sol.t)
-    theta = interpolate.interp1d(sol.t[:imax], np.real(sol.y[0])[:imax], fill_value='extrapolate')
-    theta_p = interpolate.interp1d(sol.t[:imax], np.real(sol.y[1])[:imax], fill_value='extrapolate')
+    theta = interpolate.InterpolatedUnivariateSpline(sol.t[:imax], np.real(sol.y[0])[:imax], ext=3)
+    theta_p = interpolate.InterpolatedUnivariateSpline(sol.t[:imax], np.real(sol.y[1])[:imax], ext=3)
     ypp = np.diff(np.real(sol.y[1])[:imax])/np.diff(sol.t[:imax])
-    theta_pp = interpolate.interp1d(sol.t[:imax-1], ypp, fill_value='extrapolate')
+    theta_pp = interpolate.InterpolatedUnivariateSpline(sol.t[:imax-1], ypp, ext=3)
     x1 = find_x1(theta, theta_p, x1, 12)
     return theta, theta_p, theta_pp, x1
 
@@ -106,8 +106,8 @@ def t1_odes(x, y, n, theta):
 def find_theta1(n, theta, x1, x0=-1e-12, num=100000):
     t = np.linspace(x0, x1, num=num)
     sol = integrate.solve_ivp(t1_odes, (x0, x1), (0.,0.), t_eval = t, args=(n, theta))
-    theta1 = interpolate.interp1d(sol.t, np.real(sol.y[0]), fill_value='extrapolate')
-    theta1_p = interpolate.interp1d(sol.t, np.real(sol.y[1]), fill_value='extrapolate')
+    theta1 = interpolate.InterpolatedUnivariateSpline(sol.t, np.real(sol.y[0]), ext=3)
+    theta1_p = interpolate.InterpolatedUnivariateSpline(sol.t, np.real(sol.y[1]), ext=3)
     return theta1, theta1_p
 
 
@@ -963,28 +963,32 @@ class mesa_star:
         self.x1 = R
 
         Mrs = data[:,2]
+        rhos = data[:,6]
         c1s = (xs/R)**3 * (M/Mrs)
-        self.c_1 = interpolate.interp1d(xs, c1s, fill_value='extrapolate')
+        if xs[0] == 0.:
+            c1s[0] = M/R**3 *3./(4*np.pi*rhos[0])
+        self.c_1 = interpolate.InterpolatedUnivariateSpline(xs, c1s, ext=3)
 
         gs = const_G *Mrs / (xs)**2
         ps = data[:,4]
-        rhos = data[:,6]
         Vs = rhos*gs*xs/ps
         if not np.isfinite(Vs[0]):
             Vs[0] = Vs[1]
-        self.V = interpolate.interp1d(xs, Vs, fill_value='extrapolate')
+        self.V = interpolate.InterpolatedUnivariateSpline(xs, Vs, ext=3)
 
         N2s = data[:,8]
         gammas = data[:,9]
-        self.gamma = interpolate.interp1d(xs, gammas, fill_value='extrapolate')
+        self.gamma = interpolate.InterpolatedUnivariateSpline(xs, gammas, ext=3)
 
         Om2s = (data[:,18]/Omc)**2
-        self.fOm2 = interpolate.interp1d(xs, Om2s, fill_value='extrapolate')
+        self.fOm2 = interpolate.InterpolatedUnivariateSpline(xs, Om2s, ext=3)
         if ver == 233:
             qs = data[:,19]
-            self.q = interpolate.interp1d(xs, qs, fill_value='extrapolate')
+            qs[np.abs(qs)<1e-12] = 1e-12
+            self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
 
             nus = data[:,21]/np.sqrt(const_G*M*R)
-            self.nu = interpolate.interp1d(xs, nus, fill_value='extrapolate')
+            nus[np.abs(nus)<1e-12] = 1e-12
+            self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
 
 
