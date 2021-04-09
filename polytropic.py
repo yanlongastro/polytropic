@@ -567,6 +567,64 @@ class osc_rad:
         return bds
 
 
+class osc_rot_rad:
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, f_Om=0):
+        '''
+        adiabatic radial perturbations with rotations
+        Todos:
+            - consider using om2 rather than om: use another class instead
+            - extend rotations
+            - compare with GYRE
+        '''
+        self.p = p
+        self.ndim = 2
+        self.complex = False
+
+        if fixed_gamma or not ('gamma' in p.__dict__):
+            self.gamma = gamma
+            self.fixed_gamma = True
+        else:
+            self.fixed_gamma = False
+        
+        print('Note that in this setup, om is set to be om2!!!')
+
+    def eqs(self, x, om2):
+        V = self.p.V(x)
+        c_1 = self.p.c_1(x)
+        if self.fixed_gamma:
+            gamma = self.gamma
+        else:
+            gamma = self.p.gamma(x)
+
+        eqs = np.zeros((self.ndim, self.ndim))
+        eqs[0, 0] = -3.
+        eqs[0, 1] = -1./gamma
+        eqs[1, 0] = V *(4.+c_1*om2)
+        eqs[1, 1] = V
+
+        return eqs
+
+    def bds_in(self, om2):
+        if self.fixed_gamma:
+            gamma = self.gamma
+        else:
+            gamma = self.p.gamma(0.)
+
+        bds = np.zeros((1, self.ndim))
+        bds[0, 0] = 3.
+        bds[0, 1] = 1./gamma
+
+        return bds
+
+    def bds_out(self, om2):
+
+        bds = np.zeros((1, self.ndim))
+        bds[0, 0] = 4. + om2
+        bds[0, 1] = 1.
+
+        return bds
+
+
 
 
 class osc_diff_rot_ad:
@@ -721,7 +779,7 @@ class bvp_shooting:
         S[i_min:i_min+di, j_min:j_min+dj] = bds_out
 
         if debug:
-            if S.dtype==np.complex_:
+            if self.bvp.complex:
                 print(S.real)
                 print(S.imag)
             else:
@@ -733,13 +791,14 @@ class bvp_shooting:
         self.oms_real = oms_real
         self.oms_imag = oms_imag
         if not self.bvp.complex:
-            detS = np.zeros_like(oms_real)
-            for i in range(len(oms_real)):
-                om = oms_real[i]
+            oms = oms_real
+            detS = np.zeros_like(oms)
+            for i in range(len(oms)):
+                om = oms[i]
                 detS[i], _ = self.build(xs, om=om, scheme=scheme)
-            self.oms = oms_real
+            self.oms = oms
             self.detS = detS
-            return oms_real, detS
+            return oms, detS
 
         else:
             oms = np.zeros((oms_real.shape[0], oms_imag.shape[0]), dtype=np.complex_)
@@ -819,11 +878,31 @@ class bvp_shooting:
             oms = self.oms
             detS = np.abs(self.detS)
             a = detS
-            ids = np.arange(len(a))[np.r_[True, a[1:] < a[:-1]] & np.r_[a[:-1] < a[1:], True] ]
+            ids = np.arange(len(a))[np.r_[True, a[1:] <= a[:-1]] & np.r_[a[:-1] <= a[1:], True] ]
+
+            nids = len(ids)
+            if nids == 0:
+                return []
+
             if ids[0]<1:
                 ids = ids[1:]
             if ids[-1]>=len(oms)-1:
                 ids = ids[:-1]
+            
+            nids = len(ids)
+            if nids == 0:
+                return []
+
+            ids_bad = []
+            for i in range(nids):
+                if self.detS[ids[i]-1] * self.detS[ids[i]+1] >0:
+                    ids_bad.append(ids[i])
+            ids = np.setdiff1d(ids,ids_bad)
+
+            nids = len(ids)
+            if nids == 0:
+                return []
+
             oms_l = oms[ids-1]
             oms_h = oms[ids+1]
             return np.transpose([oms_l, oms_h])
