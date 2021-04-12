@@ -585,12 +585,14 @@ class osc_rot_rad:
             self.fixed_gamma = True
         else:
             self.fixed_gamma = False
+        self.f_Om = f_Om
         
         print('Note that in this setup, om is set to be om2!!!')
 
     def eqs(self, x, om2):
         V = self.p.V(x)
         c_1 = self.p.c_1(x)
+        Om2 = self.p.fOm2(x)
         if self.fixed_gamma:
             gamma = self.gamma
         else:
@@ -599,8 +601,8 @@ class osc_rot_rad:
         eqs = np.zeros((self.ndim, self.ndim))
         eqs[0, 0] = -3.
         eqs[0, 1] = -1./gamma
-        eqs[1, 0] = V *(4.+c_1*om2)
-        eqs[1, 1] = V
+        eqs[1, 0] = V *(4.+c_1*om2 +(2*self.f_Om-1.)*c_1*Om2)
+        eqs[1, 1] = V *(1.-c_1*Om2)
 
         return eqs
 
@@ -617,10 +619,10 @@ class osc_rot_rad:
         return bds
 
     def bds_out(self, om2):
-
+        Om2 = self.p.fOm2(self.p.x1)
         bds = np.zeros((1, self.ndim))
-        bds[0, 0] = 4. + om2
-        bds[0, 1] = 1.
+        bds[0, 0] = 4.+om2 +(2*self.f_Om-1.)*Om2
+        bds[0, 1] = 1.-Om2
 
         return bds
 
