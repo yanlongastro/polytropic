@@ -1022,8 +1022,28 @@ class bvp_shooting:
                 print(eigenvalue, max(np.absolute(np.dot(S, v.T))))
             v = v.reshape((len(v)//self.bvp.ndim, self.bvp.ndim)).T
             eigenfunctions.append(v)
+        self.xs = xs
         self.eigenfunctions = eigenfunctions
         return eigenfunctions
+
+
+
+    def find_n_pg(self, efs=None):
+        n_pg = []
+        if efs is None:
+            efs = self.eigenfunctions
+        for ef in efs:
+            if self.bvp.complex:
+                v = ef[0].real
+            else:
+                v = ef[0]
+            n = 0
+            for i in range(len(v)-1):
+                if v[i]*v[i+1] < 0:
+                    n += 1
+            n_pg.append(n)
+        self.n_pg = np.array(n_pg)
+        return np.array(n_pg)
             
             
 class mesa_star:
@@ -1033,7 +1053,7 @@ class mesa_star:
     def __init__(self, file):
         with open(file, 'r') as ff:
             rs = ff.readline().split()
-            ver = int(rs[-1])
+            ver = int(rs[4])
             M = float(rs[1])
             R = float(rs[2])
             Omc = np.sqrt(const_G*M/R**3)
@@ -1042,6 +1062,8 @@ class mesa_star:
         xs = data[:,1]
         self.xs = xs
         self.x1 = R
+        self.M = M
+        self.R = R
 
         Mrs = data[:,2]
         rhos = data[:,6]
