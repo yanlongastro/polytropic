@@ -679,6 +679,11 @@ class osc_diff_rot_ad:
         eqs[3, 2] = -1j*om* (x/x1)**2/q/nu
         eqs[3, 3] = 0.
 
+        # fix large nu
+        if np.abs(eqs[3, 2]) < 1e-12:
+            eqs[3, 0] = 0.
+            eqs[3, 2] = 0.
+
         return eqs
 
     def bds_in(self, om):
@@ -718,6 +723,103 @@ class osc_diff_rot_ad:
 
 
 
+
+
+class osc_diff_rot_ad_inf_nu:
+    def __init__(self, p, gamma=5./3., fixed_gamma=False):
+        '''
+        adiabatic perturbation with differential rotations: infinity nu, real equations
+        p: poly_star or any class contains: V, c_1, x1, and any other required functions.
+        Notes:
+            - the inner/outer boundary conditions are supposed to locate at center/surface, make sure bvp_shooting fits this.
+        '''
+        self.p = p
+        self.ndim = 4
+        if fixed_gamma or not ('gamma' in p.__dict__):
+            self.gamma = gamma
+            self.fixed_gamma = True
+        else:
+            self.fixed_gamma = False
+        self.complex = False
+
+    def eqs(self, x, om):
+        V = self.p.V(x)
+        c_1 = self.p.c_1(x)
+        Om2 = self.p.fOm2(x)
+        q = self.p.q(x)
+        nu = self.p.nu(x)
+        if self.fixed_gamma:
+            gamma = self.gamma
+        else:
+            gamma = self.p.gamma(x)
+        x1 = self.p.x1
+
+        eqs = np.zeros((self.ndim, self.ndim))
+        eqs[0, 0] = -3.
+        eqs[0, 1] = -1./gamma
+        eqs[0, 2] = 0.
+        eqs[0, 3] = 0.
+
+        eqs[1, 0] = V *(4.+c_1*om**2-c_1*Om2)
+        eqs[1, 1] = V *(1.-c_1*Om2)
+        eqs[1, 2] = V * 2.*c_1*Om2
+        eqs[1, 3] = 0.
+
+        eqs[2, 0] = q *(-6.)
+        eqs[2, 1] = q *(-2./gamma)
+        eqs[2, 2] = q *(-1.)
+        eqs[2, 3] = q *(1.)
+
+        eqs[3, 0] = 0.
+        eqs[3, 1] = 0.
+        eqs[3, 2] = 0.
+        eqs[3, 3] = 0.
+
+        # fix large nu
+        if np.abs(eqs[3, 2]) < 1e-12:
+            eqs[3, 0] = 0.
+            eqs[3, 2] = 0.
+
+        return eqs
+
+    def bds_in(self, om):
+        if self.fixed_gamma:
+            gamma = self.gamma
+        else:
+            gamma = self.p.gamma(0.)
+
+        bds = np.zeros((2, self.ndim))
+        bds[0, 0] = 3.
+        bds[0, 1] = 1./gamma
+        bds[0, 2] = 0.
+        bds[0, 3] = 0.
+
+        bds[1, 0] = 2.
+        bds[1, 1] = 0.
+        bds[1, 2] = 1.
+        bds[1, 3] = 0.
+
+        return bds
+
+    def bds_out(self, om):
+        Om2 = self.p.fOm2(self.p.x1)
+
+        bds = np.zeros((2, self.ndim))
+        bds[0, 0] = 4. + om**2 -Om2
+        bds[0, 1] = 1. - Om2
+        bds[0, 2] = 2. * Om2
+        bds[0, 3] = 0.
+
+        bds[1, 0] = 2.
+        bds[1, 1] = 0.
+        bds[1, 2] = 1.
+        bds[1, 3] = 0.
+
+        return bds
+
+
+
+
 def solve_homogeneous_linear_equations(U):
     '''
     https://stackoverflow.com/questions/1835246/how-to-solve-homogeneous-linear-equations-with-numpy
@@ -736,6 +838,29 @@ def find_local_minima_2d(array2d):
             (array2d <= np.roll(array2d, -1, 0)) &
             (array2d <= np.roll(array2d,  1, 1)) &
             (array2d <= np.roll(array2d, -1, 1)))
+
+def get_grad(X, Y, Z, im, steps=[1, 1]):
+    '''
+    X, Y: 2d array such that (x, y) = X[i,j], Y[i,j]
+    im: tuple or array
+    '''
+    for i in range(2):
+        if im[i]+steps[i] == X.shape[i] or im[i]+steps[i] < 0:
+            steps[i] *= -1
+
+    grad = np.zeros(2)
+    for i in range(2):
+        im_step = np.copy(im)
+        im_step[(i+1)%2] += steps[(i+1)%2]
+        dz = Z[tuple(im)] - Z[tuple(im_step)]
+        if i==0:
+            dd = X[tuple(im)] - X[tuple(im_step)]
+        else:
+            dd = Y[tuple(im)] - Y[tuple(im_step)]
+        grad[i] = dz/dd
+
+    grad = grad/np.linalg.norm(grad)
+    return grad
 
 
 class bvp_shooting:
@@ -792,6 +917,7 @@ class bvp_shooting:
     def build_scan(self, xs, oms_real, oms_imag=None, scheme='middle1'):
         self.oms_real = oms_real
         self.oms_imag = oms_imag
+        self.xs = xs
         if not self.bvp.complex:
             oms = oms_real
             detS = np.zeros_like(oms)
@@ -819,63 +945,86 @@ class bvp_shooting:
         '''
         Plot norm of the determinant (real, imag, abs)
         '''
-        oms_real, oms_imag = self.oms_real, self.oms_imag
-        dx = np.diff(oms_real)[0]
-        dy = np.diff(oms_imag)[0]
-        extent = [oms_real.min()-dx/2, oms_real.max()+dx/2, oms_imag.min()-dy/2, oms_imag.max()+dy/2]
+        if self.bvp.complex:
+            oms_real, oms_imag = self.oms_real, self.oms_imag
+            dx = np.diff(oms_real)[0]
+            dy = np.diff(oms_imag)[0]
+            extent = [oms_real.min()-dx/2, oms_real.max()+dx/2, oms_imag.min()-dy/2, oms_imag.max()+dy/2]
 
-        fig, axs = plt.subplots(1, 3, figsize=(10, 3))
-        ax = axs[0]
-        t = self.detS.real.T
-        ax.imshow(np.log10(np.abs(t)), alpha=1, extent=extent, origin='lower')
-        ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
-        ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
-        ax.set_title(r'$\lg(|{\rm Re~}\mathcal{D}(\tilde{\omega})|)$')
+            fig, axs = plt.subplots(1, 3, figsize=(10, 3))
+            ax = axs[0]
+            t = self.detS.real.T
+            ax.imshow(np.log10(np.abs(t)), alpha=1, extent=extent, origin='lower')
+            ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
+            ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
+            ax.set_title(r'$\lg(|{\rm Re~}\mathcal{D}(\tilde{\omega})|)$')
 
-        ax = axs[1]
-        t = self.detS.imag.T
-        ax.imshow(np.log10(np.abs(t)), alpha=1, extent=extent, origin='lower')
-        ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
-        ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
-        ax.set_title(r'$\lg(|{\rm Im~}\mathcal{D}(\tilde{\omega})|)$')
+            ax = axs[1]
+            t = self.detS.imag.T
+            ax.imshow(np.log10(np.abs(t)), alpha=1, extent=extent, origin='lower')
+            ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
+            ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
+            ax.set_title(r'$\lg(|{\rm Im~}\mathcal{D}(\tilde{\omega})|)$')
 
-        ax = axs[2]
-        ax.imshow(np.log10(np.absolute(self.detS.T)), alpha=2, extent=extent, origin='lower')
-        ax.set_xlim((None, extent[1]))
-        ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
-        ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
-        ax.set_title(r'$\lg(|\mathcal{D}(\tilde{\omega})|)$')
+            ax = axs[2]
+            ax.imshow(np.log10(np.absolute(self.detS.T)), alpha=2, extent=extent, origin='lower')
+            ax.set_xlim((None, extent[1]))
+            ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
+            ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
+            ax.set_title(r'$\lg(|\mathcal{D}(\tilde{\omega})|)$')
 
-        if save_path != '':
-            plt.savefig(save_path, bbox_inches='tight')
-        plt.show()
-        # return fig
+            if save_path != '':
+                plt.savefig(save_path, bbox_inches='tight')
+            plt.show()
+        else:
+            fig, ax = plt.subplots()
+            ax.semilogy(self.oms, np.abs(self.detS))
+            ax.set_xlabel(r'$\tilde{\omega}$')
+            ax.set_ylabel(r'$|\mathcal{D}(\tilde{\omega})|$')
+            plt.show()
 
 
     def plot_zero_contours(self, save_path=''):
         '''
         Plot zero contours of the determinant (real, imag)
         '''
-        fig, ax = plt.subplots()
-        X, Y = np.meshgrid(self.oms_real, self.oms_imag)
-        Z = self.detS.real.T
-        ax.contour(X, Y, Z, [0.], colors='r')
-        ax.contourf(X, Y, Z, [0., np.inf], colors='r', alpha=0.2)
+        if self.bvp.complex:
+            fig, ax = plt.subplots()
+            X, Y = np.meshgrid(self.oms_real, self.oms_imag)
+            Z = self.detS.real.T
+            ax.contour(X, Y, Z, [0.], colors='r')
+            ax.contourf(X, Y, Z, [0., np.inf], colors='r', alpha=0.2)
 
-        Z = self.detS.imag.T
-        ax.contour(X, Y, Z, [0.], colors='k')
-        ax.contourf(X, Y, Z, [0., np.inf], colors='k', alpha=0.2)
+            Z = self.detS.imag.T
+            ax.contour(X, Y, Z, [0.], colors='k')
+            ax.contourf(X, Y, Z, [0., np.inf], colors='k', alpha=0.2)
 
-        ax.set_aspect('equal')
-        ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
-        ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
-        if save_path != '':
-            plt.savefig(save_path, bbox_inches='tight')
-        plt.show()
-        # return fig
+            oms, brackets = self.set_initial_brackets(d=3)
+            for om in oms:
+                ax.scatter(om.real, om.imag, c='b', s=1)
+            for bracket in brackets:
+                for pt in bracket:
+                    ax.scatter(pt.real, pt.imag, c='g', s=1)
+
+            ax.set_aspect('equal')
+            ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
+            ax.set_ylabel(r'${\rm Im~}\tilde{\omega}$')
+            if save_path != '':
+                plt.savefig(save_path, bbox_inches='tight')
+            plt.show()
+        else:
+            fig, ax = plt.subplots()
+            ax.plot(self.oms, self.detS)
+            ax.set_xlabel(r'$\tilde{\omega}$')
+            ax.set_ylabel(r'$\mathcal{D}(\tilde{\omega})$')
+            plt.show()
 
 
-    def set_initial_brackets(self, d=3):
+    def set_initial_brackets(self, d=3, value_crit=True, grad_crit=False, grad_from_grid=False):
+        '''
+        value_crit: by positive/negative signs of detS's real/imag
+        grad_crit: by dot product with detS's grad
+        '''
         if not self.bvp.complex:
             oms = self.oms
             detS = np.abs(self.detS)
@@ -920,16 +1069,41 @@ class bvp_shooting:
             pts_center = []
             pts_neighbors = []
 
+            # find grad of detS
+            X, Y = np.meshgrid(self.oms_real, self.oms_imag)
+
             for k in range(len(ims)):
                 im = ims[k]
                 pt_center = pts_center_temp[k]
-                ims_temp = [[(i>im[0]-d) & (i<im[0]+d+1) & (j>im[1]-d) & (j<im[1]+d+1) for j in range(ny)] for i in range(nx)]
+                # find grads of detS
+                grads = []
+                if grad_from_grid:
+                    Z = self.detS.real.T
+                    grad = get_grad(X, Y, Z, im)
+                    grads.append(grad[0] + 1j*grad[1])
+                    Z = self.detS.imag.T
+                    grad = get_grad(X, Y, Z, im)
+                    grads.append(grad[0] + 1j*grad[1])
+                else:
+                    dd = 1e-4
+                    s0, _ = self.build(self.xs, pt_center)
+                    sx, _ = self.build(self.xs, pt_center+dd)
+                    sy, _ = self.build(self.xs, pt_center+dd*1j)
+                    grads.append((sx-s0).real/dd + 1j*(sy-s0).real/dd )
+                    grads.append((sx-s0).imag/dd + 1j*(sy-s0).imag/dd )
+                
+                ims_temp = [[(i>im[0]-d) & (i<im[0]+d) & (j>im[1]-d) & (j<im[1]+d) for j in range(ny)] for i in range(nx)]
                 pts = []
                 sucess = True
                 for ij in [[1, 1], [1, -1], [-1, -1], [-1, 1]]:
                     i = ij[0]
                     j = ij[1]
-                    crit = ims_temp & (i*detS.real>0) & (j*detS.imag>0)
+                    
+                    crit = ims_temp & (oms != pt_center)
+                    if value_crit:
+                        crit = crit & (i*detS.real>0) & (j*detS.imag>0)
+                    if grad_crit:
+                        crit = crit & ((i*grads[0]*np.conj(oms-pt_center)).real>0) & ((j*grads[1]*np.conj(oms-pt_center)).real>0)
                     if not crit.any():
                         # check if the point is valid
                         sucess = False
@@ -989,6 +1163,7 @@ class bvp_shooting:
                                 pts[(i+1)%(len(pts))] = mid
                         mid = np.mean(pts)
                         eps = max(np.absolute(pts - mid))
+                        detS_m, _ = self.build(xs, mid)
                         epsD = np.abs(detS_m)
                         # this is probably not a very good idea
                         k += 1
@@ -1050,7 +1225,7 @@ class mesa_star:
     '''
     read mesa file for gyre and construct a star model
     '''
-    def __init__(self, file):
+    def __init__(self, file, nu=None):
         with open(file, 'r') as ff:
             rs = ff.readline().split()
             ver = int(rs[4])
@@ -1085,13 +1260,23 @@ class mesa_star:
 
         Om2s = (data[:,18]/Omc)**2
         self.fOm2 = interpolate.InterpolatedUnivariateSpline(xs, Om2s, ext=3)
+
         if ver == 233:
             qs = data[:,19]
-            qs[np.abs(qs)<1e-12] = 1e-12
+            qs[np.abs(qs)<1e-12] = -1e-12
             self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
 
-            nus = data[:,21]/np.sqrt(const_G*M*R)
+            if nu is None:
+                nus = data[:,21]/np.sqrt(const_G*M*R)
+            else:
+                nus = np.repeat(nu, len(data))
             nus[np.abs(nus)<1e-12] = 1e-12
+            self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
+
+        else:
+            qs = np.repeat(-1e-12, len(data))
+            nus = np.repeat(nu, len(data))
+            self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
             self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
 
 
