@@ -143,6 +143,8 @@ class poly:
         self.J = mr2Om_int/MR2
 
         self.q = lambda x: self.qA(x) /2./self.fA(x)
+        dx = 1e-6
+        self.qq = lambda x: (self.q(x+dx)-self.q(x))/dx*x
 
 
     def V(self, x):
@@ -725,10 +727,10 @@ class osc_diff_rot_ad:
 
 
 
-class osc_diff_rot_ad_inf_nu:
+class osc_diff_rot_ad_new_var:
     def __init__(self, p, gamma=5./3., fixed_gamma=False):
         '''
-        adiabatic perturbation with differential rotations: infinity nu, real equations
+        adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
         Notes:
             - the inner/outer boundary conditions are supposed to locate at center/surface, make sure bvp_shooting fits this.
@@ -740,13 +742,14 @@ class osc_diff_rot_ad_inf_nu:
             self.fixed_gamma = True
         else:
             self.fixed_gamma = False
-        self.complex = False
+        self.complex = True
 
     def eqs(self, x, om):
         V = self.p.V(x)
         c_1 = self.p.c_1(x)
         Om2 = self.p.fOm2(x)
         q = self.p.q(x)
+        qq = self.p.qq(x)
         nu = self.p.nu(x)
         if self.fixed_gamma:
             gamma = self.gamma
@@ -754,7 +757,7 @@ class osc_diff_rot_ad_inf_nu:
             gamma = self.p.gamma(x)
         x1 = self.p.x1
 
-        eqs = np.zeros((self.ndim, self.ndim))
+        eqs = np.zeros((self.ndim, self.ndim), dtype=np.complex_)
         eqs[0, 0] = -3.
         eqs[0, 1] = -1./gamma
         eqs[0, 2] = 0.
@@ -768,12 +771,12 @@ class osc_diff_rot_ad_inf_nu:
         eqs[2, 0] = q *(-6.)
         eqs[2, 1] = q *(-2./gamma)
         eqs[2, 2] = q *(-1.)
-        eqs[2, 3] = q *(1.)
+        eqs[2, 3] = 1.
 
-        eqs[3, 0] = 0.
+        eqs[3, 0] = -1j*om* (x/x1)**2/q/nu *2
         eqs[3, 1] = 0.
-        eqs[3, 2] = 0.
-        eqs[3, 3] = 0.
+        eqs[3, 2] = -1j*om* (x/x1)**2/q/nu
+        eqs[3, 3] = qq
 
         # fix large nu
         if np.abs(eqs[3, 2]) < 1e-12:
@@ -788,7 +791,7 @@ class osc_diff_rot_ad_inf_nu:
         else:
             gamma = self.p.gamma(0.)
 
-        bds = np.zeros((2, self.ndim))
+        bds = np.zeros((2, self.ndim), dtype=np.complex_)
         bds[0, 0] = 3.
         bds[0, 1] = 1./gamma
         bds[0, 2] = 0.
@@ -804,7 +807,7 @@ class osc_diff_rot_ad_inf_nu:
     def bds_out(self, om):
         Om2 = self.p.fOm2(self.p.x1)
 
-        bds = np.zeros((2, self.ndim))
+        bds = np.zeros((2, self.ndim), dtype=np.complex_)
         bds[0, 0] = 4. + om**2 -Om2
         bds[0, 1] = 1. - Om2
         bds[0, 2] = 2. * Om2
@@ -864,6 +867,12 @@ def get_grad(X, Y, Z, im, steps=[1, 1]):
 
 
 class bvp_shooting:
+    '''
+    To-dos:
+        - mesh refinement for the scan process
+        - debug the gradient method (may have something to do with the precision)
+        - debug the tolerance problem: detS or dx cannot be refined anymore in some cases
+    '''
     def __init__(self, bvp):
         self.bvp = bvp
 
@@ -1266,6 +1275,12 @@ class mesa_star:
             qs[np.abs(qs)<1e-12] = -1e-12
             self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
 
+            qqs = np.diff(qs)/np.diff(xs)
+            qqs = np.concatenate(([qqs[-1]], qqs))
+            qqs *= xs
+            qqs[np.abs(qqs)<1e-12] = 1e-12
+            self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
+
             if nu is None:
                 nus = data[:,21]/np.sqrt(const_G*M*R)
             else:
@@ -1275,8 +1290,10 @@ class mesa_star:
 
         else:
             qs = np.repeat(-1e-12, len(data))
+            qqs = np.repeat(1e-12, len(data))
             nus = np.repeat(nu, len(data))
             self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
+            self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
             self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
 
 
