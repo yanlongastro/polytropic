@@ -144,7 +144,7 @@ class poly:
 
         self.q = lambda x: self.qA(x) /2./self.fA(x)
         dx = 1e-6
-        self.qq = lambda x: (self.q(x+dx)-self.q(x))/dx*x
+        self.qq = lambda x: (self.q(x+dx)-self.q(x))/dx*x/(self.q(x)+1e-12)
 
 
     def V(self, x):
@@ -1277,7 +1277,7 @@ class mesa_star:
 
             qqs = np.diff(qs)/np.diff(xs)
             qqs = np.concatenate(([qqs[-1]], qqs))
-            qqs *= xs
+            qqs *= xs/qs
             qqs[np.abs(qqs)<1e-12] = 1e-12
             self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
 
