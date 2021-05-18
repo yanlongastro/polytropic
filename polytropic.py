@@ -632,7 +632,7 @@ class osc_rot_rad:
 
 
 class osc_diff_rot_ad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True):
         '''
         adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
@@ -647,12 +647,14 @@ class osc_diff_rot_ad:
         else:
             self.fixed_gamma = False
         self.complex = True
+        self.redef_y4 = redef_y4
 
     def eqs(self, x, om):
         V = self.p.V(x)
         c_1 = self.p.c_1(x)
         Om2 = self.p.fOm2(x)
         q = self.p.q(x)
+        qq = self.p.qq(x)
         nu = self.p.nu(x)
         if self.fixed_gamma:
             gamma = self.gamma
@@ -671,20 +673,26 @@ class osc_diff_rot_ad:
         eqs[1, 2] = V * 2.*c_1*Om2
         eqs[1, 3] = 0.
 
-        eqs[2, 0] = q *(-6.)
-        eqs[2, 1] = q *(-2./gamma)
-        eqs[2, 2] = q *(-1.)
-        eqs[2, 3] = q *(1.)
+        if not self.redef_y4:
+            eqs[2, 0] = q *(-6.)
+            eqs[2, 1] = q *(-2./gamma)
+            eqs[2, 2] = q *(-1.)
+            eqs[2, 3] = q *(1.)
 
-        eqs[3, 0] = -1j*om* (x/x1)**2/q/nu *2
-        eqs[3, 1] = 0.
-        eqs[3, 2] = -1j*om* (x/x1)**2/q/nu
-        eqs[3, 3] = 0.
+            eqs[3, 0] = -1j*om* (x/x1)**2/q/nu *2
+            eqs[3, 1] = 0.
+            eqs[3, 2] = -1j*om* (x/x1)**2/q/nu
+            eqs[3, 3] = 0.
+        else:
+            eqs[2, 0] = q *(-6.)
+            eqs[2, 1] = q *(-2./gamma)
+            eqs[2, 2] = q *(-1.)
+            eqs[2, 3] = 1.
 
-        # fix large nu
-        if np.abs(eqs[3, 2]) < 1e-12:
-            eqs[3, 0] = 0.
-            eqs[3, 2] = 0.
+            eqs[3, 0] = -1j*om* (x/x1)**2/nu *2
+            eqs[3, 1] = 0.
+            eqs[3, 2] = -1j*om* (x/x1)**2/nu
+            eqs[3, 3] = qq
 
         return eqs
 
@@ -700,10 +708,10 @@ class osc_diff_rot_ad:
         bds[0, 2] = 0.
         bds[0, 3] = 0.
 
-        bds[1, 0] = 2.
+        bds[1, 0] = 0.
         bds[1, 1] = 0.
-        bds[1, 2] = 1.
-        bds[1, 3] = 0.
+        bds[1, 2] = 0.
+        bds[1, 3] = 1.
 
         return bds
 
@@ -716,10 +724,10 @@ class osc_diff_rot_ad:
         bds[0, 2] = 2. * Om2
         bds[0, 3] = 0.
 
-        bds[1, 0] = 2.
+        bds[1, 0] = 0.
         bds[1, 1] = 0.
-        bds[1, 2] = 1.
-        bds[1, 3] = 0.
+        bds[1, 2] = 0.
+        bds[1, 3] = 1.
 
         return bds
 
@@ -773,15 +781,10 @@ class osc_diff_rot_ad_new_var:
         eqs[2, 2] = q *(-1.)
         eqs[2, 3] = 1.
 
-        eqs[3, 0] = -1j*om* (x/x1)**2/q/nu *2
+        eqs[3, 0] = -1j*om* (x/x1)**2/nu *2
         eqs[3, 1] = 0.
-        eqs[3, 2] = -1j*om* (x/x1)**2/q/nu
+        eqs[3, 2] = -1j*om* (x/x1)**2/nu
         eqs[3, 3] = qq
-
-        # fix large nu
-        if np.abs(eqs[3, 2]) < 1e-12:
-            eqs[3, 0] = 0.
-            eqs[3, 2] = 0.
 
         return eqs
 
@@ -797,10 +800,10 @@ class osc_diff_rot_ad_new_var:
         bds[0, 2] = 0.
         bds[0, 3] = 0.
 
-        bds[1, 0] = 2.
+        bds[1, 0] = 0.
         bds[1, 1] = 0.
-        bds[1, 2] = 1.
-        bds[1, 3] = 0.
+        bds[1, 2] = 0.
+        bds[1, 3] = 1.
 
         return bds
 
@@ -813,10 +816,10 @@ class osc_diff_rot_ad_new_var:
         bds[0, 2] = 2. * Om2
         bds[0, 3] = 0.
 
-        bds[1, 0] = 2.
+        bds[1, 0] = 0.
         bds[1, 1] = 0.
-        bds[1, 2] = 1.
-        bds[1, 3] = 0.
+        bds[1, 2] = 0.
+        bds[1, 3] = 1.
 
         return bds
 
@@ -1234,7 +1237,11 @@ class mesa_star:
     '''
     read mesa file for gyre and construct a star model
     '''
-    def __init__(self, file, nu=None):
+    def __init__(self, file, nu=None, adapt_equilibrium=''):
+        '''
+        nu: add a uniform value of nu along the radius
+        adapt_equilibrium: adapt the pressure/rotation profile to make sure it is in equilibrium, options: 'pressure', 'rotation'
+        '''
         with open(file, 'r') as ff:
             rs = ff.readline().split()
             ver = int(rs[4])
@@ -1251,23 +1258,33 @@ class mesa_star:
 
         Mrs = data[:,2]
         rhos = data[:,6]
+        ps = data[:,4]
+        N2s = data[:,8]
+        gammas = data[:,9]
+        Oms = data[:,18]
+
         c1s = (xs/R)**3 * (M/Mrs)
         if xs[0] == 0.:
             c1s[0] = M/R**3 *3./(4*np.pi*rhos[0])
         self.c_1 = interpolate.InterpolatedUnivariateSpline(xs, c1s, ext=3)
 
         gs = const_G *Mrs / (xs)**2
-        ps = data[:,4]
+        if xs[0] == 0.:
+            gs[0] = 0.
+
+        if 'pressure' in adapt_equilibrium:
+            ps, _ = adapt_pressure(xs, rhos, gs, Oms, ps)
+        
         Vs = rhos*gs*xs/ps
+
         if not np.isfinite(Vs[0]):
             Vs[0] = Vs[1]
         self.V = interpolate.InterpolatedUnivariateSpline(xs, Vs, ext=3)
 
-        N2s = data[:,8]
-        gammas = data[:,9]
+        
         self.gamma = interpolate.InterpolatedUnivariateSpline(xs, gammas, ext=3)
 
-        Om2s = (data[:,18]/Omc)**2
+        Om2s = (Oms/Omc)**2
         self.fOm2 = interpolate.InterpolatedUnivariateSpline(xs, Om2s, ext=3)
 
         if ver == 233:
@@ -1276,7 +1293,7 @@ class mesa_star:
             self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
 
             qqs = np.diff(qs)/np.diff(xs)
-            qqs = np.concatenate(([qqs[-1]], qqs))
+            qqs = np.concatenate(([qqs[0]], qqs))
             qqs *= xs/qs
             qqs[np.abs(qqs)<1e-12] = 1e-12
             self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
@@ -1295,5 +1312,23 @@ class mesa_star:
             self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
             self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
             self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
+
+
+def adapt_pressure(xs, rhos, gs, Oms, ps):
+    '''
+    to ensure hydro equilibrium
+    '''
+    dpdr = rhos*(Oms**2*xs - gs)
+    dlnpdr = dpdr/ps
+    temp = []
+    for i in range(len(dpdr))[1:]:
+        temp.append(integrate.simps(dlnpdr[:i], xs[:i]))
+    temp = np.array(temp)
+    temp += np.log(ps[0])
+    temp = np.concatenate(([temp[0]], temp))
+    return np.exp(temp), dpdr
+
+def adapt_rotation(xs, rhos, gs, ps, Oms):
+    2333
 
 
