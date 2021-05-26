@@ -146,6 +146,8 @@ class poly:
         dx = 1e-6
         self.qq = lambda x: (self.q(x+dx)-self.q(x))/dx*x/(self.q(x)+1e-12)
 
+        self.rho_r = lambda x: (self.theta(x))**n
+
 
     def V(self, x):
         x = max(x, 1e-10)
@@ -525,6 +527,7 @@ class osc_rad:
         self.p = p
         self.ndim = 2
         self.complex = False
+        self.conservation_bds = False
 
         if fixed_gamma or not ('gamma' in p.__dict__):
             self.gamma = gamma
@@ -581,6 +584,7 @@ class osc_rot_rad:
         self.p = p
         self.ndim = 2
         self.complex = False
+        self.conservation_bds = False
 
         if fixed_gamma or not ('gamma' in p.__dict__):
             self.gamma = gamma
@@ -632,7 +636,7 @@ class osc_rot_rad:
 
 
 class osc_diff_rot_ad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True, conservation_bds=False):
         '''
         adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
@@ -648,6 +652,7 @@ class osc_diff_rot_ad:
             self.fixed_gamma = False
         self.complex = True
         self.redef_y4 = redef_y4
+        self.conservation_bds = conservation_bds
 
     def eqs(self, x, om):
         V = self.p.V(x)
@@ -701,6 +706,7 @@ class osc_diff_rot_ad:
             gamma = self.gamma
         else:
             gamma = self.p.gamma(0.)
+        q = self.p.q(0.)
 
         bds = np.zeros((2, self.ndim), dtype=np.complex_)
         bds[0, 0] = 3.
@@ -710,8 +716,16 @@ class osc_diff_rot_ad:
 
         bds[1, 0] = 0.
         bds[1, 1] = 0.
-        bds[1, 2] = 0.
-        bds[1, 3] = 1.
+
+        if not self.redef_y4:
+            bds[1, 2] = -1.
+            bds[1, 3] = 1.
+        else:
+            bds[1, 2] = q *(-1.)
+            bds[1, 3] = 1.
+
+        if self.conservation_bds:
+            return bds[:1]
 
         return bds
 
@@ -731,97 +745,17 @@ class osc_diff_rot_ad:
 
         return bds
 
-
-
-
-
-class osc_diff_rot_ad_new_var:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False):
-        '''
-        adiabatic perturbation with differential rotations
-        p: poly_star or any class contains: V, c_1, x1, and any other required functions.
-        Notes:
-            - the inner/outer boundary conditions are supposed to locate at center/surface, make sure bvp_shooting fits this.
-        '''
-        self.p = p
-        self.ndim = 4
-        if fixed_gamma or not ('gamma' in p.__dict__):
-            self.gamma = gamma
-            self.fixed_gamma = True
-        else:
-            self.fixed_gamma = False
-        self.complex = True
-
-    def eqs(self, x, om):
-        V = self.p.V(x)
-        c_1 = self.p.c_1(x)
-        Om2 = self.p.fOm2(x)
-        q = self.p.q(x)
-        qq = self.p.qq(x)
-        nu = self.p.nu(x)
-        if self.fixed_gamma:
-            gamma = self.gamma
-        else:
-            gamma = self.p.gamma(x)
+    def bds_conservation(self, x):
+        """
+        conservation relation as an linear integration: in this case we set delta(J) = 0
+        """
+        rho = self.p.rho_r(x)/self.p.rho_r(0.)
+        Om = np.sqrt(self.p.fOm2(x))
         x1 = self.p.x1
 
-        eqs = np.zeros((self.ndim, self.ndim), dtype=np.complex_)
-        eqs[0, 0] = -3.
-        eqs[0, 1] = -1./gamma
-        eqs[0, 2] = 0.
-        eqs[0, 3] = 0.
+        integrand = rho*Om*(x/x1)**4 * np.array([[2., 0., 1., 0.]], dtype=np.complex_)
 
-        eqs[1, 0] = V *(4.+c_1*om**2-c_1*Om2)
-        eqs[1, 1] = V *(1.-c_1*Om2)
-        eqs[1, 2] = V * 2.*c_1*Om2
-        eqs[1, 3] = 0.
-
-        eqs[2, 0] = q *(-6.)
-        eqs[2, 1] = q *(-2./gamma)
-        eqs[2, 2] = q *(-1.)
-        eqs[2, 3] = 1.
-
-        eqs[3, 0] = -1j*om* (x/x1)**2/nu *2
-        eqs[3, 1] = 0.
-        eqs[3, 2] = -1j*om* (x/x1)**2/nu
-        eqs[3, 3] = qq
-
-        return eqs
-
-    def bds_in(self, om):
-        if self.fixed_gamma:
-            gamma = self.gamma
-        else:
-            gamma = self.p.gamma(0.)
-
-        bds = np.zeros((2, self.ndim), dtype=np.complex_)
-        bds[0, 0] = 3.
-        bds[0, 1] = 1./gamma
-        bds[0, 2] = 0.
-        bds[0, 3] = 0.
-
-        bds[1, 0] = 0.
-        bds[1, 1] = 0.
-        bds[1, 2] = 0.
-        bds[1, 3] = 1.
-
-        return bds
-
-    def bds_out(self, om):
-        Om2 = self.p.fOm2(self.p.x1)
-
-        bds = np.zeros((2, self.ndim), dtype=np.complex_)
-        bds[0, 0] = 4. + om**2 -Om2
-        bds[0, 1] = 1. - Om2
-        bds[0, 2] = 2. * Om2
-        bds[0, 3] = 0.
-
-        bds[1, 0] = 0.
-        bds[1, 1] = 0.
-        bds[1, 2] = 0.
-        bds[1, 3] = 1.
-
-        return bds
+        return integrand
 
 
 
@@ -916,6 +850,20 @@ class bvp_shooting:
         bds_out = self.bvp.bds_out(om)
         di, dj = bds_out.shape
         S[i_min:i_min+di, j_min:j_min+dj] = bds_out
+        i_min += di
+        j_min = 0
+
+        if self.bvp.conservation_bds:
+            # add conservation relations
+            for j in range(1, N):
+                T = self.bvp.bds_conservation((xs[j]+xs[j-1])/2.) *(xs[j]-xs[j-1])
+                di, dj = T.shape
+                if j == 1:
+                    S[i_min:i_min+di, j_min:j_min+dj] = T*0.5
+                else:
+                    S[i_min:i_min+di, j_min:j_min+dj] = T
+                j_min +=dj
+            S[i_min:i_min+di, j_min:j_min+dj] = T*0.5
 
         if debug:
             if self.bvp.complex:
@@ -1281,7 +1229,7 @@ class mesa_star:
             Vs[0] = Vs[1]
         self.V = interpolate.InterpolatedUnivariateSpline(xs, Vs, ext=3)
 
-        
+        self.rho_r = interpolate.InterpolatedUnivariateSpline(xs, rhos, ext=3)
         self.gamma = interpolate.InterpolatedUnivariateSpline(xs, gammas, ext=3)
 
         Om2s = (Oms/Omc)**2
