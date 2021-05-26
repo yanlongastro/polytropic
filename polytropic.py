@@ -636,7 +636,7 @@ class osc_rot_rad:
 
 
 class osc_diff_rot_ad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True, conservation_bds=False):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True, conservation_bds=True):
         '''
         adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
@@ -855,15 +855,18 @@ class bvp_shooting:
 
         if self.bvp.conservation_bds:
             # add conservation relations
-            for j in range(1, N):
-                T = self.bvp.bds_conservation((xs[j]+xs[j-1])/2.) *(xs[j]-xs[j-1])
-                di, dj = T.shape
+            for j in range(1, N-1):
+                L = self.bvp.bds_conservation((xs[j]+xs[j-1])/2.) *(xs[j]-xs[j-1])
+                di, dj = L.shape
+                R = self.bvp.bds_conservation((xs[j]+xs[j+1])/2.) *(xs[j+1]-xs[j])
                 if j == 1:
-                    S[i_min:i_min+di, j_min:j_min+dj] = T*0.5
-                else:
-                    S[i_min:i_min+di, j_min:j_min+dj] = T
-                j_min +=dj
-            S[i_min:i_min+di, j_min:j_min+dj] = T*0.5
+                    S[i_min:i_min+di, j_min:j_min+dj] = L*0.5
+                    j_min += dj
+                S[i_min:i_min+di, j_min:j_min+dj] = L*0.5+R*0.5
+                j_min += dj
+                if j == N-2:
+                    S[i_min:i_min+di, j_min:j_min+dj] = R*0.5
+                    j_min += dj
 
         if debug:
             if self.bvp.complex:
