@@ -5,6 +5,8 @@ from scipy import optimize
 #from tqdm import tqdm
 from tqdm.notebook import tqdm
 import warnings
+import itertools
+from matplotlib import path
 
 
 #matplotlib
@@ -803,6 +805,25 @@ def get_grad(X, Y, Z, im, steps=[1, 1]):
     return grad
 
 
+def polygon_area(pts):
+    pts = np.array(pts)
+    x = pts[:,0]
+    y = pts[:,1]
+    correction = x[-1] * y[0] - y[-1]* x[0]
+    main_area = np.dot(x[:-1], y[1:]) - np.dot(y[:-1], x[1:])
+    return 0.5*np.abs(main_area + correction)
+
+def find_best_bracket(pts_raw, pt_center):
+    """
+    maximum the area or area/perimeter^2 (or combination), to ensure that the root (as well as the initial guess) is safely inside the bracket.
+    """
+    polys = np.array(list(itertools.product(*pts_raw)))
+    polys = np.array([poly for poly in polys if path.Path(poly).contains_points([pt_center])[0]])
+    areas = np.array([polygon_area(poly) for poly in polys])
+    pts = polys[areas.argmax()]
+    return pts
+
+
 class bvp_shooting:
     '''
     To-dos:
@@ -947,7 +968,7 @@ class bvp_shooting:
             plt.show()
 
 
-    def plot_zero_contours(self, save_path=''):
+    def plot_zero_contours(self, save_path='', d=3, best_bracket=True):
         '''
         Plot zero contours of the determinant (real, imag)
         '''
@@ -962,7 +983,7 @@ class bvp_shooting:
             ax.contour(X, Y, Z, [0.], colors='k')
             ax.contourf(X, Y, Z, [0., np.inf], colors='k', alpha=0.2)
 
-            oms, brackets = self.set_initial_brackets(d=3)
+            oms, brackets = self.set_initial_brackets(d=d, best_bracket=best_bracket)
             for om in oms:
                 ax.scatter(om.real, om.imag, c='b', s=1)
             for bracket in brackets:
@@ -983,7 +1004,7 @@ class bvp_shooting:
             plt.show()
 
 
-    def set_initial_brackets(self, d=3, value_crit=True, grad_crit=False, grad_from_grid=False):
+    def set_initial_brackets(self, d=3, value_crit=True, grad_crit=False, grad_from_grid=False, best_bracket=True):
         '''
         value_crit: by positive/negative signs of detS's real/imag
         grad_crit: by dot product with detS's grad
@@ -1026,7 +1047,7 @@ class bvp_shooting:
             nx, ny = oms.shape
             mesh = np.array([[(i, j) for j in range(ny)] for i in range(nx)])
             crit = find_local_minima_2d(np.absolute(detS))
-            ims = mesh[crit]
+            ims = mesh[crit]    # initial guess (mesh ids)
             pts_center_temp = oms[crit]
             # local minimum: initial guess; then we try to find the four neighboring points
             pts_center = []
@@ -1056,7 +1077,8 @@ class bvp_shooting:
                     grads.append((sx-s0).imag/dd + 1j*(sy-s0).imag/dd )
                 
                 ims_temp = [[(i>im[0]-d) & (i<im[0]+d) & (j>im[1]-d) & (j<im[1]+d) for j in range(ny)] for i in range(nx)]
-                pts = []
+                pts = []    # bracket (coordinate)
+                ims_raw = []    # braket (mesh ids, not selected)
                 sucess = True
                 for ij in [[1, 1], [1, -1], [-1, -1], [-1, 1]]:
                     i = ij[0]
@@ -1074,15 +1096,19 @@ class bvp_shooting:
                         break
                     pts_temp = oms[crit]
                     pts.append(pts_temp[np.absolute(pts_temp - pt_center).argmin()])
+                    ims_raw.append(mesh[crit])
                 if not sucess:
                     continue
-                else:
-                    pts_center.append(pt_center)
-                    pts_neighbors.append(pts)
+                pts_center.append(pt_center)
+
+                if best_bracket:
+                    ims_bracket = find_best_bracket(ims_raw, im)
+                    pts = np.array([oms[tuple(x)] for x in ims_bracket])
+                pts_neighbors.append(pts)
 
             return np.array(pts_center), np.array(pts_neighbors)
 
-    def find_eigenvalues(self, xs, method='Nelder-Mead', options={'xatol':1e-6}, loss_function='abs', xtol=1e-12, debug=False, iter_max=100, d=2, Dtol=1e-9):
+    def find_eigenvalues(self, xs, method='Nelder-Mead', options={'xatol':1e-6}, loss_function='abs', xtol=1e-12, debug=False, iter_max=100, d=3, Dtol=1e-9, best_bracket=True):
         '''
         Method:
             - Zigzag (my method)
@@ -1095,7 +1121,7 @@ class bvp_shooting:
             for bracket in brackets:
                 eigenvalues.append(optimize.ridder(D, *bracket))
         else:
-            oms, brackets = self.set_initial_brackets(d=d)
+            oms, brackets = self.set_initial_brackets(d=d, best_bracket=best_bracket)
             if loss_function == 'abs':
                 D = lambda om: np.absolute(self.build(xs, om[0]+om[1]*1j)[0])
             elif loss_function == 'multiply':
