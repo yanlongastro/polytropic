@@ -1108,7 +1108,7 @@ class bvp_shooting:
 
             return np.array(pts_center), np.array(pts_neighbors)
 
-    def find_eigenvalues(self, xs, method='Nelder-Mead', options={'xatol':1e-6}, loss_function='abs', xtol=1e-12, debug=False, iter_max=100, d=3, Dtol=1e-9, best_bracket=True):
+    def find_eigenvalues(self, xs, method='Zigzag', options={'xatol':1e-6}, loss_function='abs', xtol=1e-12, debug=False, iter_max=100, d=2, Dtol=1e-9, best_bracket=True):
         '''
         Method:
             - Zigzag (my method)
@@ -1209,29 +1209,92 @@ class bvp_shooting:
         self.n_pg = np.array(n_pg)
         return np.array(n_pg)
             
-            
+
+
+def get_mesa_var(model, key):
+    """
+    read mesa output file, get the value of key in header
+    """
+    with open(model) as f:
+        f.readline()
+        keys = f.readline().split()
+        values = f.readline().split()
+        for i in range(2):
+            values[i] = int(values[i])
+        for i in range(2,46):
+            values[i] = float(values[i])
+        for i in range(46,51):
+            values[i] = values[i].replace('"', '')
+        var = values[keys.index(key)]
+        return var
+    
+def get_mesa_var_list(model, key, flip=True):
+    """
+    read mesa output file, get data along the radius
+    """
+    with open(model) as f:
+        for i in range(5):
+            f.readline()
+        keys = f.readline().split()
+        values = np.loadtxt(model, skiprows=6)
+        values = values.T
+        var = values[keys.index(key)]
+        if flip:
+            var = np.flip(var)
+        return var
+
+
 class mesa_star:
     '''
     read mesa file for gyre and construct a star model
     '''
-    def __init__(self, file, nu=None, adapt_equilibrium=''):
+    def __init__(self, gyre_file, mesa_file=None, nu=None, ignore_qs=False, adapt_equilibrium=''):
         '''
         nu: add a uniform value of nu along the radius
         adapt_equilibrium: adapt the pressure/rotation profile to make sure it is in equilibrium, options: 'pressure', 'rotation'
         '''
-        with open(file, 'r') as ff:
+        self.adapt_equilibrium = adapt_equilibrium
+        self.read_gyre_file(gyre_file)
+        if mesa_file is not None:
+            self.read_mesa_file(mesa_file)
+
+        if nu is not None:
+            nus = np.repeat(nu, self.xdim)
+            nus[np.abs(nus)<1e-12] = 1e-12
+            self.nu = interpolate.InterpolatedUnivariateSpline(self.xs, nus, ext=3)
+        if ignore_qs:
+            qs = np.repeat(-1e-12, self.xdim)
+            qqs = np.repeat(1e-12, self.xdim)
+            self.q = interpolate.InterpolatedUnivariateSpline(self.xs, qs, ext=3)
+            self.qq = interpolate.InterpolatedUnivariateSpline(self.xs, qqs, ext=3)
+
+
+    def read_mesa_file(self, mesa_file):
+        xs = get_mesa_var_list(mesa_file, 'radius')
+        xs *= self.x1/xs[-1]
+        nu_tsf = 10**get_mesa_var_list(mesa_file, 'log_nu_TSF')
+        nu_am = 10**get_mesa_var_list(mesa_file, 'log_am_nu')
+        nus = nu_tsf+nu_am
+        nus /= (self.x1**2*self.Omc)
+        nus[np.abs(nus)<1e-12] = 1e-12
+        self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
+
+    def read_gyre_file(self, gyre_file):
+        with open(gyre_file, 'r') as ff:
             rs = ff.readline().split()
             ver = int(rs[4])
             M = float(rs[1])
             R = float(rs[2])
             Omc = np.sqrt(const_G*M/R**3)
+            self.Omc = Omc
         self.ver = ver
-        data = np.loadtxt(file, skiprows=1)
+        data = np.loadtxt(gyre_file, skiprows=1)
         xs = data[:,1]
         self.xs = xs
         self.x1 = R
         self.M = M
         self.R = R
+        self.xdim = len(xs)
 
         Mrs = data[:,2]
         rhos = data[:,6]
@@ -1243,52 +1306,37 @@ class mesa_star:
         c1s = (xs/R)**3 * (M/Mrs)
         if xs[0] == 0.:
             c1s[0] = M/R**3 *3./(4*np.pi*rhos[0])
-        self.c_1 = interpolate.InterpolatedUnivariateSpline(xs, c1s, ext=3)
 
         gs = const_G *Mrs / (xs)**2
         if xs[0] == 0.:
             gs[0] = 0.
 
-        if 'pressure' in adapt_equilibrium:
+        if 'pressure' in self.adapt_equilibrium:
             ps, _ = adapt_pressure(xs, rhos, gs, Oms, ps)
-        
         Vs = rhos*gs*xs/ps
 
         if not np.isfinite(Vs[0]):
             Vs[0] = Vs[1]
+        
+        self.c_1 = interpolate.InterpolatedUnivariateSpline(xs, c1s, ext=3)
         self.V = interpolate.InterpolatedUnivariateSpline(xs, Vs, ext=3)
-
         self.rho_r = interpolate.InterpolatedUnivariateSpline(xs, rhos, ext=3)
         self.gamma = interpolate.InterpolatedUnivariateSpline(xs, gammas, ext=3)
-
         Om2s = (Oms/Omc)**2
         self.fOm2 = interpolate.InterpolatedUnivariateSpline(xs, Om2s, ext=3)
 
-        if ver == 233:
-            qs = data[:,19]
-            qs[np.abs(qs)<1e-12] = -1e-12
-            self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
+        dOmega_dr = np.diff(Oms)/np.diff(xs)
+        dOmega_dr = np.insert(dOmega_dr, 0, dOmega_dr[0])
+        qs = dOmega_dr *xs /Oms
+        qs[np.isnan(qs)] = 1e-12
+        qs[np.abs(qs)<1e-12] = -1e-12
+        self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
 
-            qqs = np.diff(qs)/np.diff(xs)
-            qqs = np.concatenate(([qqs[0]], qqs))
-            qqs *= xs/qs
-            qqs[np.abs(qqs)<1e-12] = 1e-12
-            self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
-
-            if nu is None:
-                nus = data[:,21]/np.sqrt(const_G*M*R)
-            else:
-                nus = np.repeat(nu, len(data))
-            nus[np.abs(nus)<1e-12] = 1e-12
-            self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
-
-        else:
-            qs = np.repeat(-1e-12, len(data))
-            qqs = np.repeat(1e-12, len(data))
-            nus = np.repeat(nu, len(data))
-            self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
-            self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
-            self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
+        qqs = np.diff(qs)/np.diff(xs)
+        qqs = np.concatenate(([qqs[0]], qqs))
+        qqs *= xs/qs
+        qqs[np.abs(qqs)<1e-12] = 1e-12
+        self.qq = interpolate.InterpolatedUnivariateSpline(xs, qqs, ext=3)
 
 
 def adapt_pressure(xs, rhos, gs, Oms, ps):
@@ -1305,7 +1353,12 @@ def adapt_pressure(xs, rhos, gs, Oms, ps):
     temp = np.concatenate(([temp[0]], temp))
     return np.exp(temp), dpdr
 
-def adapt_rotation(xs, rhos, gs, ps, Oms):
-    2333
+def adapt_rotation(xs, rhos, gs, ps):
+    dpdr = np.diff(ps)/np.diff(xs)
+    dpdr = np.concatenate(([dpdr[0]], dpdr))
+    Oms = np.sqrt((dpdr + rhos*gs)/(rhos*xs))
+    if not np.isfinite(Oms[0]):
+        Oms[0] = Oms[1]
+    return Oms
 
 
