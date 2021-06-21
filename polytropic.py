@@ -2,11 +2,13 @@ import numpy as np
 from scipy import integrate
 from scipy import interpolate
 from scipy import optimize
+from scipy import stats
 #from tqdm import tqdm
 from tqdm.notebook import tqdm
 import warnings
 import itertools
 from matplotlib import path
+from numba import jit
 
 
 #matplotlib
@@ -530,6 +532,7 @@ class osc_rad:
         self.ndim = 2
         self.complex = False
         self.conservation_bds = False
+        self.n_roll = 1
 
         if fixed_gamma or not ('gamma' in p.__dict__):
             self.gamma = gamma
@@ -587,6 +590,7 @@ class osc_rot_rad:
         self.ndim = 2
         self.complex = False
         self.conservation_bds = False
+        self.n_roll = 1
 
         if fixed_gamma or not ('gamma' in p.__dict__):
             self.gamma = gamma
@@ -638,7 +642,7 @@ class osc_rot_rad:
 
 
 class osc_diff_rot_ad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True, conservation_bds=True):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True, conservation_bds=True, y4_rescale_factor=1.0):
         '''
         adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
@@ -655,6 +659,11 @@ class osc_diff_rot_ad:
         self.complex = True
         self.redef_y4 = redef_y4
         self.conservation_bds = conservation_bds
+        self.y4_rescale_factor = y4_rescale_factor
+        if conservation_bds:
+            self.n_roll = 3
+        else:
+            self.n_roll = 2
 
     def eqs(self, x, om):
         V = self.p.V(x)
@@ -684,11 +693,11 @@ class osc_diff_rot_ad:
             eqs[2, 0] = q *(-6.)
             eqs[2, 1] = q *(-2./gamma)
             eqs[2, 2] = q *(-1.)
-            eqs[2, 3] = q *(1.)
+            eqs[2, 3] = q *(1.) *self.y4_rescale_factor
 
-            eqs[3, 0] = -1j*om* (x/x1)**2/q/nu *2
+            eqs[3, 0] = -1j*om* (x/x1)**2/q/nu *2 /self.y4_rescale_factor
             eqs[3, 1] = 0.
-            eqs[3, 2] = -1j*om* (x/x1)**2/q/nu
+            eqs[3, 2] = -1j*om* (x/x1)**2/q/nu /self.y4_rescale_factor
             eqs[3, 3] = 0.
         else:
             eqs[2, 0] = q *(-6.)
@@ -813,15 +822,67 @@ def polygon_area(pts):
     main_area = np.dot(x[:-1], y[1:]) - np.dot(y[:-1], x[1:])
     return 0.5*np.abs(main_area + correction)
 
-def find_best_bracket(pts_raw, pt_center):
+
+def polygon_distance_measure(poly, pt_center, key='min'):
     """
-    maximum the area or area/perimeter^2 (or combination), to ensure that the root (as well as the initial guess) is safely inside the bracket.
+    calculate distance from pt_center to poly's edges
+    key: 'min', 'hmean'
+    """
+    n = len(poly)
+    dists = []
+    for i in range(n):
+        pt_a = poly[i]
+        pt_b = poly[(i+1)%n]
+        tri = np.array([pt_a, pt_b, pt_center])
+        area = polygon_area(tri)
+        dists.append(2*area/np.linalg.norm(pt_a-pt_b))
+    if 'min' in key:
+        return np.min(dists)
+    if 'hmean' in key:
+        return stats.hmean(dists)
+
+
+def find_best_bracket(pts_raw, pt_center, key='distance'):
+    """
+    maximum the area or area/perimeter or distance (or combination), to ensure that the root (as well as the initial guess) is safely inside the bracket.
+    key: 'distance', 'area'
     """
     polys = np.array(list(itertools.product(*pts_raw)))
     polys = np.array([poly for poly in polys if path.Path(poly).contains_points([pt_center])[0]])
-    areas = np.array([polygon_area(poly) for poly in polys])
-    pts = polys[areas.argmax()]
+    if 'area' in key:
+        areas = np.array([polygon_area(poly) for poly in polys])
+        pts = polys[areas.argmax()]
+    if 'distance' in key:
+        dists = np.array([polygon_distance_measure(poly, pt_center) for poly in polys])
+        pts = polys[dists.argmax()]
     return pts
+
+
+#@jit(nopython=True)
+def get_det(S, N, n_roll=3):
+    '''
+    fast way to calculate det(S)
+    N: bvp.ndim; n_roll: number of outer bc + integration bc
+    '''
+    det = 1.0
+    imax, jmax = S.shape
+    ndim = imax
+    S = np.roll(S, n_roll*ndim)
+    C = S[0:N, jmax-N:jmax]
+    while jmax > N*2:
+        A = S[imax-N:imax, jmax-N*2:jmax-N]
+        B = S[imax-N:imax, jmax-N:jmax]
+        C = S[0:N, jmax-N*2:jmax-N] - C @ np.linalg.inv(B) @ A
+        det *= np.linalg.det(B)
+        imax -= N
+        jmax -= N
+    D = S[imax-N*2:imax-N, jmax-N*2:jmax-N]
+    A = S[imax-N:imax, jmax-N*2:jmax-N]
+    B = S[imax-N:imax, jmax-N:jmax]
+    det *= np.linalg.det(B)
+    det *= np.linalg.det(D - C @ np.linalg.inv(B) @ A)
+    det *= (-1)**((ndim-1) *n_roll)
+    return det
 
 
 class bvp_shooting:
@@ -834,7 +895,7 @@ class bvp_shooting:
     def __init__(self, bvp):
         self.bvp = bvp
 
-    def build(self, xs, om, debug=False, scheme='middle1'):
+    def build(self, xs, om, debug=False, scheme='middle1', fast_det=True):
         '''
         build the n*N rank matrix
         xs[0] is always assumed to be 0.
@@ -895,12 +956,18 @@ class bvp_shooting:
                 print(S.imag)
             else:
                 print(S)
-        
+        if fast_det:
+            return get_det(S, self.bvp.ndim, self.bvp.n_roll), S
         return np.linalg.det(S), S
 
-    def build_scan(self, xs, oms_real, oms_imag=None, scheme='middle1'):
-        self.oms_real = oms_real
-        self.oms_imag = oms_imag
+    def build_scan(self, xs, oms_real, oms_imag=None, scheme='middle1', inverse_om=False):
+        self.inverse_om = inverse_om
+        if not inverse_om:
+            self.oms_real = oms_real
+            self.oms_imag = oms_imag
+        else:
+            self.oms_real = 1./oms_real
+            self.oms_imag = 1./oms_imag
         self.xs = xs
         if not self.bvp.complex:
             oms = oms_real
@@ -974,7 +1041,10 @@ class bvp_shooting:
         '''
         if self.bvp.complex:
             fig, ax = plt.subplots()
-            X, Y = np.meshgrid(self.oms_real, self.oms_imag)
+            if self.inverse_om:
+                X, Y = np.meshgrid(1./self.oms_real, 1./self.oms_imag)
+            else:
+                X, Y = np.meshgrid(self.oms_real, self.oms_imag)
             Z = self.detS.real.T
             ax.contour(X, Y, Z, [0.], colors='r')
             ax.contourf(X, Y, Z, [0., np.inf], colors='r', alpha=0.2)
@@ -1175,10 +1245,13 @@ class bvp_shooting:
         self.eigenvalues = eigenvalues
         return eigenvalues
 
-    def find_eigenfunctions(self, xs, normalize=True, debug=False):
+    def find_eigenfunctions(self, xs, normalize=True, debug=False, rescale_S=True):
         eigenfunctions = []
         for eigenvalue in self.eigenvalues:
             _, S = self.build(xs, eigenvalue)
+            if rescale_S:
+                for i in range(len(S)):
+                    S[i] /= max(np.absolute(S[i]))
             v = solve_homogeneous_linear_equations(S)
             if normalize:
                 v /= v[len(S)-self.bvp.ndim]
@@ -1258,10 +1331,12 @@ class mesa_star:
         if mesa_file is not None:
             self.read_mesa_file(mesa_file)
 
-        if nu is not None:
+        if nu is not None and type(nu) is float:
             nus = np.repeat(nu, self.xdim)
             nus[np.abs(nus)<1e-12] = 1e-12
             self.nu = interpolate.InterpolatedUnivariateSpline(self.xs, nus, ext=3)
+        if nu is not None and callable(nu):
+            self.nu = lambda x: nu(x/self.x1)
         if ignore_qs:
             qs = np.repeat(-1e-12, self.xdim)
             qqs = np.repeat(1e-12, self.xdim)
