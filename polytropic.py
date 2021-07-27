@@ -3,6 +3,7 @@ from scipy import integrate
 from scipy import interpolate
 from scipy import optimize
 from scipy import stats
+from scipy import sparse
 #from tqdm import tqdm
 from tqdm.notebook import tqdm
 import warnings
@@ -121,7 +122,7 @@ def find_theta1(n, theta, x1, x0=-1e-12, num=100000):
 
 
 class poly:
-    def __init__(self, n, A=0., xmax=15., fA=None, qA=None):
+    def __init__(self, n, A=0., xmax=15., fA=None, qA=None, nu=None, gamma=None):
         sol, imax, x1 = model_solutions(n, x0=-1e-12, x1=xmax, rtol=1e-8, atol=1e-8, A=A, fA=fA, qA=qA)
         #print(sol.t, sol.y, x1)
         self.theta, self.theta_p, self.theta_pp, self.x1 = theta_interp(sol, imax, x1)
@@ -138,6 +139,8 @@ class poly:
             self.fA = np.vectorize(lambda x: A)
             self.qA = np.vectorize(lambda x: 0.)
         self.n = n
+        self.nu = nu
+        self.gamma = gamma
         
         self.theta1, self.theta1_p = find_theta1(n, self.theta, self.x1)
 
@@ -147,7 +150,7 @@ class poly:
         self.J = mr2Om_int/MR2
 
         self.q = lambda x: self.qA(x) /2./self.fA(x)
-        dx = 1e-6
+        dx = 1e-8
         self.qq = lambda x: (self.q(x+dx)-self.q(x))/dx*x/(self.q(x)+1e-12)
 
         self.rho_r = lambda x: (self.theta(x))**n
@@ -642,7 +645,7 @@ class osc_rot_rad:
 
 
 class osc_diff_rot_ad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=True, conservation_bds=True, y4_rescale_factor=1.0):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=False, conservation_bds=True, y4_rescale_factor=1.0):
         '''
         adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
@@ -771,12 +774,18 @@ class osc_diff_rot_ad:
 
 
 
-def solve_homogeneous_linear_equations(U):
+def solve_homogeneous_linear_equations(U, method='eig'):
     '''
     https://stackoverflow.com/questions/1835246/how-to-solve-homogeneous-linear-equations-with-numpy
+    method: eig, sparse_eig, svd
     '''
     # find the eigenvalues and eigenvector of U(transpose).U
-    e_vals, e_vecs = np.linalg.eig(np.dot(U.T, U))  
+    if method == 'sparse_eig':
+        e_vals, e_vecs = sparse.linalg.eigs(np.dot(U.T, U), k=1, which='SM', sigma=0.)
+    if method == 'eig':
+        e_vals, e_vecs = np.linalg.eig(np.dot(U.T, U))  
+    if method == 'svd':
+        u, e_vals, e_vecs = np.linalg.svd(U)
     # extract the eigenvector (column) associated with the minimum eigenvalue
     return e_vecs[:, np.argmin(np.abs(e_vals))] 
 
@@ -823,7 +832,7 @@ def polygon_area(pts):
     return 0.5*np.abs(main_area + correction)
 
 
-def polygon_distance_measure(poly, pt_center, key='min'):
+def polygon_distance_measure(poly, pt_center, key='hmean'):
     """
     calculate distance from pt_center to poly's edges
     key: 'min', 'hmean'
@@ -847,8 +856,11 @@ def find_best_bracket(pts_raw, pt_center, key='distance'):
     maximum the area or area/perimeter or distance (or combination), to ensure that the root (as well as the initial guess) is safely inside the bracket.
     key: 'distance', 'area'
     """
-    polys = np.array(list(itertools.product(*pts_raw)))
-    polys = np.array([poly for poly in polys if path.Path(poly).contains_points([pt_center])[0]])
+    polys_all = np.array(list(itertools.product(*pts_raw)))
+    polys = np.array([poly for poly in polys_all if path.Path(poly).contains_points([pt_center])[0]])
+    if len(polys) == 0:
+        polys = polys_all
+        key = 'area' 
     if 'area' in key:
         areas = np.array([polygon_area(poly) for poly in polys])
         pts = polys[areas.argmax()]
@@ -962,6 +974,7 @@ class bvp_shooting:
 
     def build_scan(self, xs, oms_real, oms_imag=None, scheme='middle1', inverse_om=False):
         self.inverse_om = inverse_om
+        self.build_scheme = scheme
         if not inverse_om:
             self.oms_real = oms_real
             self.oms_imag = oms_imag
@@ -1035,7 +1048,7 @@ class bvp_shooting:
             plt.show()
 
 
-    def plot_zero_contours(self, save_path='', d=3, best_bracket=True):
+    def plot_zero_contours(self, save_path='', d=3, best_bracket=True, show_brackets=True):
         '''
         Plot zero contours of the determinant (real, imag)
         '''
@@ -1053,12 +1066,13 @@ class bvp_shooting:
             ax.contour(X, Y, Z, [0.], colors='k')
             ax.contourf(X, Y, Z, [0., np.inf], colors='k', alpha=0.2)
 
-            oms, brackets = self.set_initial_brackets(d=d, best_bracket=best_bracket)
-            for om in oms:
-                ax.scatter(om.real, om.imag, c='b', s=1)
-            for bracket in brackets:
-                for pt in bracket:
-                    ax.scatter(pt.real, pt.imag, c='g', s=1)
+            if show_brackets:
+                oms, brackets = self.set_initial_brackets(d=d, best_bracket=best_bracket)
+                for om in oms:
+                    ax.scatter(om.real, om.imag, c='b', s=2)
+                for bracket in brackets:
+                    for pt in bracket:
+                        ax.scatter(pt.real, pt.imag, c='g', s=2)
 
             ax.set_aspect('equal')
             ax.set_xlabel(r'${\rm Re~}\tilde{\omega}$')
@@ -1140,9 +1154,9 @@ class bvp_shooting:
                     grads.append(grad[0] + 1j*grad[1])
                 else:
                     dd = 1e-4
-                    s0, _ = self.build(self.xs, pt_center)
-                    sx, _ = self.build(self.xs, pt_center+dd)
-                    sy, _ = self.build(self.xs, pt_center+dd*1j)
+                    s0, _ = self.build(self.xs, pt_center, scheme=self.build_scheme)
+                    sx, _ = self.build(self.xs, pt_center+dd, scheme=self.build_scheme)
+                    sy, _ = self.build(self.xs, pt_center+dd*1j, scheme=self.build_scheme)
                     grads.append((sx-s0).real/dd + 1j*(sy-s0).real/dd )
                     grads.append((sx-s0).imag/dd + 1j*(sy-s0).imag/dd )
                 
@@ -1187,32 +1201,42 @@ class bvp_shooting:
         eigenvalues = []
         if not self.bvp.complex:
             brackets = self.set_initial_brackets()
-            D = lambda om: self.build(xs, om)[0]
+            D = lambda om: self.build(xs, om, scheme=self.build_scheme)[0]
             for bracket in brackets:
                 eigenvalues.append(optimize.ridder(D, *bracket))
         else:
             oms, brackets = self.set_initial_brackets(d=d, best_bracket=best_bracket)
             if loss_function == 'abs':
-                D = lambda om: np.absolute(self.build(xs, om[0]+om[1]*1j)[0])
+                D = lambda om: np.absolute(self.build(xs, om[0]+om[1]*1j, scheme=self.build_scheme)[0])
             elif loss_function == 'multiply':
                 def D(om):
-                    detS, _ = self.build(xs, om[0]+om[1]*1j)
+                    detS, _ = self.build(xs, om[0]+om[1]*1j, scheme=self.build_scheme)
                     return np.abs(detS.real * detS.imag)
             
             for i in range(len(oms)):
                 om = oms[i]
                 pts = brackets[i]
                 if method == 'Zigzag':
-                    eps = 1e100
+                    eps = eps_last = 1e100
                     epsD = 1e100
                     k = 0
                     while (eps>xtol or epsD>Dtol) and k<iter_max:
-                        # move
+                        # diagonal mid point
+                    #     for i in range(len(pts)//2):
+                    #         pair = pts[[i, i+len(pts)//2]]
+                    #         mid = (pair[0]+pair[1])/2
+                    # #         print(pair, mid)
+                    #         if z1(*mid)*z1(*pair[0])>0 and z2(*mid)*z2(*pair[0])>0:
+                    #             pts[i] = mid
+                    #         elif z1(*mid)*z1(*pair[1])>0 and z2(*mid)*z2(*pair[1])>0:
+                    #             pts[i+2] = mid                     
+
+                        # edge mid point
                         for i in range(len(pts)):
                             pair = pts[[i, (i+1)%len(pts)]]
                             mid = (pair[0]+pair[1])/2
-                            detS_m, _ = self.build(xs, mid)
-                            detS_p, _ = self.build(xs, pair[0])
+                            detS_m, _ = self.build(xs, mid, scheme=self.build_scheme)
+                            detS_p, _ = self.build(xs, pair[0], scheme=self.build_scheme)
                             # if debug:
                             #     print(pts)
                             if np.sign(detS_m.real)*np.sign(detS_p.real)>0 and np.sign(detS_m.imag)*np.sign(detS_p.imag)>0:
@@ -1222,7 +1246,11 @@ class bvp_shooting:
                                 pts[(i+1)%(len(pts))] = mid
                         mid = np.mean(pts)
                         eps = max(np.absolute(pts - mid))
-                        detS_m, _ = self.build(xs, mid)
+                        if eps/eps_last >0.999:
+                            # break timely if it does not converge
+                            break
+                        eps_last = eps
+                        detS_m, _ = self.build(xs, mid, scheme=self.build_scheme)
                         epsD = np.abs(detS_m)
                         # this is probably not a very good idea
                         k += 1
@@ -1245,14 +1273,14 @@ class bvp_shooting:
         self.eigenvalues = eigenvalues
         return eigenvalues
 
-    def find_eigenfunctions(self, xs, normalize=True, debug=False, rescale_S=True):
+    def find_eigenfunctions(self, xs, normalize=True, debug=False, rescale_S=True, method='eig'):
         eigenfunctions = []
         for eigenvalue in self.eigenvalues:
-            _, S = self.build(xs, eigenvalue)
+            _, S = self.build(xs, eigenvalue, scheme=self.build_scheme)
             if rescale_S:
                 for i in range(len(S)):
                     S[i] /= max(np.absolute(S[i]))
-            v = solve_homogeneous_linear_equations(S)
+            v = solve_homogeneous_linear_equations(S, method=method)
             if normalize:
                 v /= v[len(S)-self.bvp.ndim]
             if debug:
@@ -1262,6 +1290,13 @@ class bvp_shooting:
         self.xs = xs
         self.eigenfunctions = eigenfunctions
         return eigenfunctions
+
+
+    def find_eigenfunctions_by_integration(self, xs, om):
+        '''
+        find the eigenfunctions with integration: integrate and then find the coefficients.
+        '''
+        y0 = np.zeros(self.bvp.ndim)
 
 
 
@@ -1345,11 +1380,14 @@ class mesa_star:
 
 
     def read_mesa_file(self, mesa_file):
-        xs = get_mesa_var_list(mesa_file, 'radius')
+        try:
+            xs = get_mesa_var_list(mesa_file, 'radius')
+        except:
+            xs = 10**get_mesa_var_list(mesa_file, 'logR')
         xs *= self.x1/xs[-1]
-        nu_tsf = 10**get_mesa_var_list(mesa_file, 'log_nu_TSF')
-        nu_am = 10**get_mesa_var_list(mesa_file, 'log_am_nu')
-        nus = nu_tsf+nu_am
+        # nu_tsf = 10**get_mesa_var_list(mesa_file, 'log_nu_TSF')
+        nu_am = 10**get_mesa_var_list(mesa_file, 'am_log_nu_omega')
+        nus = nu_am
         nus /= (self.x1**2*self.Omc)
         nus[np.abs(nus)<1e-12] = 1e-12
         self.nu = interpolate.InterpolatedUnivariateSpline(xs, nus, ext=3)
@@ -1405,6 +1443,8 @@ class mesa_star:
         qs = dOmega_dr *xs /Oms
         qs[np.isnan(qs)] = 1e-12
         qs[np.abs(qs)<1e-12] = -1e-12
+        qs[0] = qs[1]
+        #qs[-1] = qs[-2]
         self.q = interpolate.InterpolatedUnivariateSpline(xs, qs, ext=3)
 
         qqs = np.diff(qs)/np.diff(xs)
