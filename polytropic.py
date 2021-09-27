@@ -581,7 +581,7 @@ class osc_rad:
 
 
 class osc_rot_rad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False, f_Om=0):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, f_Om=0, rescale_ys=False):
         '''
         adiabatic radial perturbations with rotations
         Todos:
@@ -593,6 +593,7 @@ class osc_rot_rad:
         self.ndim = 2
         self.complex = False
         self.conservation_bds = False
+        self.rescale_ys = rescale_ys
         self.n_roll = 1
 
         if fixed_gamma or not ('gamma' in p.__dict__):
@@ -618,6 +619,10 @@ class osc_rot_rad:
         eqs[0, 1] = -1./gamma
         eqs[1, 0] = V *(4.+c_1*om2 +(2*self.f_Om-1.)*c_1*Om2)
         eqs[1, 1] = V *(1.-c_1*Om2)
+
+        if self.rescale_ys:
+            eqs[0, 0] += 2.
+            eqs[1, 1] += 2.
 
         return eqs
 
@@ -645,7 +650,7 @@ class osc_rot_rad:
 
 
 class osc_diff_rot_ad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=False, conservation_bds=True, y4_rescale_factor=1.0):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=False, conservation_bds=True, y4_rescale_factor=1.0, rescale_ys=False, y4_bds=True):
         '''
         adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
@@ -663,10 +668,12 @@ class osc_diff_rot_ad:
         self.redef_y4 = redef_y4
         self.conservation_bds = conservation_bds
         self.y4_rescale_factor = y4_rescale_factor
+        self.rescale_ys = rescale_ys
         if conservation_bds:
             self.n_roll = 3
         else:
             self.n_roll = 2
+        self.y4_bds=y4_bds
 
     def eqs(self, x, om):
         V = self.p.V(x)
@@ -712,15 +719,49 @@ class osc_diff_rot_ad:
             eqs[3, 1] = 0.
             eqs[3, 2] = -1j*om* (x/x1)**2/nu
             eqs[3, 3] = qq
+        
+        if self.rescale_ys:
+            eqs[0, 0] += 2.
+            eqs[1, 1] += 2.
+            eqs[2, 2] += 2.
+            eqs[3, 3] += 2.
 
         return eqs
+
+
+    def eqs_om(self, x):
+        # terms that are prop to om
+        q = self.p.q(x)
+        nu = self.p.nu(x)
+        x1 = self.p.x1
+
+        eqs = np.zeros((self.ndim, self.ndim), dtype=np.complex_)
+        if not self.redef_y4:
+            eqs[3, 0] = -1j* (x/x1)**2/q/nu *2 /self.y4_rescale_factor
+            eqs[3, 2] = -1j* (x/x1)**2/q/nu /self.y4_rescale_factor
+        else:
+            eqs[3, 0] = -1j* (x/x1)**2/nu *2
+            eqs[3, 2] = -1j* (x/x1)**2/nu
+        return eqs
+
+
+    def eqs_om2(self, x):
+        # terms that are prop to om**2
+        V = self.p.V(x)
+        c_1 = self.p.c_1(x)
+
+        eqs = np.zeros((self.ndim, self.ndim), dtype=np.complex_)
+        eqs[1, 0] = V *c_1
+
+        return eqs
+
 
     def bds_in(self, om):
         if self.fixed_gamma:
             gamma = self.gamma
         else:
             gamma = self.p.gamma(0.)
-        q = self.p.q(0.)
+        q = self.p.q(1e-12)
 
         bds = np.zeros((2, self.ndim), dtype=np.complex_)
         bds[0, 0] = 3.
@@ -731,11 +772,16 @@ class osc_diff_rot_ad:
         bds[1, 0] = 0.
         bds[1, 1] = 0.
 
+        if self.y4_bds:
+            y3f = 0. # -y_3+y_4=0 or y_4=0
+        else:
+            y3f = -1.
+
         if not self.redef_y4:
-            bds[1, 2] = -1.
+            bds[1, 2] = y3f
             bds[1, 3] = 1.
         else:
-            bds[1, 2] = q *(-1.)
+            bds[1, 2] = q *(y3f)
             bds[1, 3] = 1.
 
         if self.conservation_bds:
@@ -752,10 +798,16 @@ class osc_diff_rot_ad:
         bds[0, 2] = 2. * Om2
         bds[0, 3] = 0.
 
-        bds[1, 0] = 0.
-        bds[1, 1] = 0.
-        bds[1, 2] = 0.
-        bds[1, 3] = 1.
+        if self.y4_bds:
+            bds[1, 0] = 0.
+            bds[1, 1] = 0.
+            bds[1, 2] = 0.
+            bds[1, 3] = 1.  # y_4=0
+        else:
+            bds[1, 0] = 2
+            bds[1, 1] = 0.
+            bds[1, 2] = 1.
+            bds[1, 3] = 0.  # 2y_1+y_3=0
 
         return bds
 
@@ -767,7 +819,10 @@ class osc_diff_rot_ad:
         Om = np.sqrt(self.p.fOm2(x))
         x1 = self.p.x1
 
-        integrand = rho*Om*(x/x1)**4 * np.array([[2., 0., 1., 0.]], dtype=np.complex_)
+        if self.rescale_ys:
+            integrand = rho*Om*(x/x1)**2 * np.array([[2., 0., 1., 0.]], dtype=np.complex_)
+        else:
+            integrand = rho*Om*(x/x1)**4 * np.array([[2., 0., 1., 0.]], dtype=np.complex_)
 
         return integrand
 
@@ -850,14 +905,29 @@ def polygon_distance_measure(poly, pt_center, key='hmean'):
     if 'hmean' in key:
         return stats.hmean(dists)
 
+def polygon_norm(val):
+    v = 0.
+    for x in val:
+        v *= np.abs(x.real*x.imag)
+    return v
 
-def find_best_bracket(pts_raw, pt_center, key='distance'):
+
+def find_best_bracket(pts_raw, pt_center, Dvals=None, key='norm'):
     """
     maximum the area or area/perimeter or distance (or combination), to ensure that the root (as well as the initial guess) is safely inside the bracket.
     key: 'distance', 'area'
     """
     polys_all = np.array(list(itertools.product(*pts_raw)))
-    polys = np.array([poly for poly in polys_all if path.Path(poly).contains_points([pt_center])[0]])
+    Dvals_polys = np.array(list(itertools.product(*Dvals)))
+    polys = []
+    vals = []
+    for poly, val in zip(polys_all, Dvals_polys):
+        if path.Path(poly).contains_points([pt_center])[0]:
+            polys.append(poly)
+            vals.append(val)
+    # polys = np.array([poly for poly in polys_all if path.Path(poly).contains_points([pt_center])[0]])
+    polys = np.array(polys)
+    vals = np.array(vals)
     if len(polys) == 0:
         polys = polys_all
         key = 'area' 
@@ -867,6 +937,9 @@ def find_best_bracket(pts_raw, pt_center, key='distance'):
     if 'distance' in key:
         dists = np.array([polygon_distance_measure(poly, pt_center) for poly in polys])
         pts = polys[dists.argmax()]
+    if 'norm' in key:
+        norms = np.array([polygon_norm(val) for val in vals])
+        pts = polys[norms.argmax()]
     return pts
 
 
@@ -1163,6 +1236,7 @@ class bvp_shooting:
                 ims_temp = [[(i>im[0]-d) & (i<im[0]+d) & (j>im[1]-d) & (j<im[1]+d) for j in range(ny)] for i in range(nx)]
                 pts = []    # bracket (coordinate)
                 ims_raw = []    # braket (mesh ids, not selected)
+                Dvals = []  # value of detS at each point
                 sucess = True
                 for ij in [[1, 1], [1, -1], [-1, -1], [-1, 1]]:
                     i = ij[0]
@@ -1181,12 +1255,13 @@ class bvp_shooting:
                     pts_temp = oms[crit]
                     pts.append(pts_temp[np.absolute(pts_temp - pt_center).argmin()])
                     ims_raw.append(mesh[crit])
+                    Dvals.append(detS[crit])
                 if not sucess:
                     continue
                 pts_center.append(pt_center)
 
                 if best_bracket:
-                    ims_bracket = find_best_bracket(ims_raw, im)
+                    ims_bracket = find_best_bracket(ims_raw, im, Dvals=Dvals)
                     pts = np.array([oms[tuple(x)] for x in ims_bracket])
                 pts_neighbors.append(pts)
 
@@ -1356,10 +1431,11 @@ class mesa_star:
     '''
     read mesa file for gyre and construct a star model
     '''
-    def __init__(self, gyre_file, mesa_file=None, nu=None, ignore_qs=False, adapt_equilibrium=''):
+    def __init__(self, gyre_file, mesa_file=None, nu=None, ignore_qs=False, adapt_equilibrium='', radius_mass_fraction=0.99999999):
         '''
         nu: add a uniform value of nu along the radius
         adapt_equilibrium: adapt the pressure/rotation profile to make sure it is in equilibrium, options: 'pressure', 'rotation'
+        radius_mass_fraction: with x1 the total mass takes the fraction.
         '''
         self.adapt_equilibrium = adapt_equilibrium
         self.read_gyre_file(gyre_file)
@@ -1378,8 +1454,14 @@ class mesa_star:
             self.q = interpolate.InterpolatedUnivariateSpline(self.xs, qs, ext=3)
             self.qq = interpolate.InterpolatedUnivariateSpline(self.xs, qqs, ext=3)
 
+        if radius_mass_fraction<1:
+            id = np.sum(self.Mrs/self.Mrs[-1]<=radius_mass_fraction)-1
+            self.x1c = self.xs[id]
+            self.Mc = self.Mrs[id]
+
 
     def read_mesa_file(self, mesa_file):
+        self.star_age = get_mesa_var(mesa_file, 'star_age')
         try:
             xs = get_mesa_var_list(mesa_file, 'radius')
         except:
@@ -1410,6 +1492,7 @@ class mesa_star:
         self.xdim = len(xs)
 
         Mrs = data[:,2]
+        self.Mrs = Mrs
         rhos = data[:,6]
         ps = data[:,4]
         N2s = data[:,8]
@@ -1477,3 +1560,53 @@ def adapt_rotation(xs, rhos, gs, ps):
     return Oms
 
 
+def get_delta_omega(bs, ms, xs, mode=0, second_order_from_eqs=False, use_background_relation=False, compact_version=True):
+    '''
+    low viscosity perturbation
+    '''
+    y1 = bs.eigenfunctions[mode][0]
+    p1 = bs.eigenfunctions[mode][1]
+    om2 = bs.eigenvalues[mode]
+
+    w = ms.rho_r(xs)*xs**4
+    gamma = ms.gamma(xs)
+    Om2 = ms.fOm2(xs)
+    q = ms.q(xs)
+    qq = ms.qq(xs)
+    nur = ms.nu(xs)
+    om = np.sqrt(bs.eigenvalues[mode])
+    f_Om = -2
+    
+    dy_dr = -(3*y1+1/gamma*p1)/xs
+    dy_dr[0] = 0.
+
+    if not second_order_from_eqs:
+        d2y_dr2 = np.diff(dy_dr)/np.diff(xs)
+        d2y_dr2 = np.insert(d2y_dr2, 0, d2y_dr2[0])
+
+        Lxy1 = -2*np.diff(xs/q*dy_dr)/np.diff(xs)
+        Lxy1 = np.insert(Lxy1, 0, Lxy1[0])
+        Lxy1 *= xs
+        Lxy2 = -2*np.diff(xs**2*dy_dr)/np.diff(xs)
+        Lxy2 = np.insert(Lxy2, 0, Lxy2[0])
+    else:
+        rdp1_dr = np.array([bs.bvp.eqs(xs[i], om2)[1,0]*y1[i]+bs.bvp.eqs(xs[i], om2)[1,1]*p1[i] for i in range(len(xs))])
+        rdp1_dr[-1] = 0.
+        d2y_dr2 = 1/xs**2*(-4*xs*dy_dr-1/gamma*rdp1_dr)
+        d2y_dr2[-1] = d2y_dr2[-2]
+
+    if not use_background_relation:
+        L1y1 = -2*xs**2*d2y_dr2-2*xs*dy_dr
+        L3y1 = 1/q*xs**2*d2y_dr2 + (-qq/q + 1/q+1)*xs*dy_dr
+        if not compact_version:
+            x1 = Om2*(-q)*nur/(om*(xs/ms.x1)**2)*(L1y1+f_Om*L3y1)
+        else:
+            x1 = Om2*(-q)*nur/(om*(xs/ms.x1)**2)*(Lxy1+Lxy2)
+        # plt.semilogy(xs, x1)
+        # plt.show()
+        return integrate.simps(w*x1*y1, xs)/integrate.simps(w*y1*y1, xs)/om
+    else:
+        r1 = (q+1)*dy_dr+q**2*y1/xs
+        r1 *= nur*(ms.x1)**2
+        r2 = dy_dr
+        return -2/om**2*integrate.simps(w*r1*r2*Om2, xs)/integrate.simps(w*y1*y1, xs)
