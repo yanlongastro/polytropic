@@ -603,7 +603,7 @@ class osc_rot_rad:
             self.fixed_gamma = False
         self.f_Om = f_Om
         
-        print('Note that in this setup, om is set to be om2!!!')
+        print('Note here om is set to be om2!!!')
 
     def eqs(self, x, om2):
         V = self.p.V(x)
@@ -670,7 +670,7 @@ class osc_diff_rot_ad:
         self.y4_rescale_factor = y4_rescale_factor
         self.rescale_ys = rescale_ys
         if conservation_bds:
-            self.n_roll = 3
+            self.n_roll = 2     # num of outer bc + int bc
         else:
             self.n_roll = 2
         self.y4_bds=y4_bds
@@ -773,19 +773,18 @@ class osc_diff_rot_ad:
         bds[1, 1] = 0.
 
         if self.y4_bds:
-            y3f = 0. # -y_3+y_4=0 or y_4=0
+            y3f = 0. # -y_3+y_4=0 or y_4=0 or 2y_1+y_3=0
         else:
             y3f = -1.
 
         if not self.redef_y4:
-            bds[1, 2] = y3f
-            bds[1, 3] = 1.
+            # bds[1, 2] = y3f
+            # bds[1, 3] = 1.
+            bds[1, 0] = 2.
+            bds[1, 2] = 1.
         else:
             bds[1, 2] = q *(y3f)
             bds[1, 3] = 1.
-
-        if self.conservation_bds:
-            return bds[:1]
 
         return bds
 
@@ -799,7 +798,7 @@ class osc_diff_rot_ad:
         bds[0, 3] = 0.
 
         if self.y4_bds:
-            bds[1, 0] = 0.
+            bds[1, 0] = 0.  # 2y_1+y_3=0
             bds[1, 1] = 0.
             bds[1, 2] = 0.
             bds[1, 3] = 1.  # y_4=0
@@ -808,6 +807,9 @@ class osc_diff_rot_ad:
             bds[1, 1] = 0.
             bds[1, 2] = 1.
             bds[1, 3] = 0.  # 2y_1+y_3=0
+
+        if self.conservation_bds:
+            return bds[:1]
 
         return bds
 
