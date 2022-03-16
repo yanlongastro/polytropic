@@ -650,7 +650,7 @@ class osc_rot_rad:
 
 
 class osc_diff_rot_ad:
-    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=False, conservation_bds=True, y4_rescale_factor=1.0, rescale_ys=False, y4_bds=True):
+    def __init__(self, p, gamma=5./3., fixed_gamma=False, redef_y4=False, conservation_bds=False, y4_rescale_factor=1.0, rescale_ys=False, y4_bds=False):
         '''
         adiabatic perturbation with differential rotations
         p: poly_star or any class contains: V, c_1, x1, and any other required functions.
@@ -798,7 +798,7 @@ class osc_diff_rot_ad:
         bds[0, 3] = 0.
 
         if self.y4_bds:
-            bds[1, 0] = 0.  # 2y_1+y_3=0
+            bds[1, 0] = 0.  
             bds[1, 1] = 0.
             bds[1, 2] = 0.
             bds[1, 3] = 1.  # y_4=0
@@ -941,7 +941,8 @@ def find_best_bracket(pts_raw, pt_center, Dvals=None, key='norm'):
         pts = polys[dists.argmax()]
     if 'norm' in key:
         norms = np.array([polygon_norm(val) for val in vals])
-        pts = polys[norms.argmax()]
+        areas = np.array([1 if np.abs(polygon_area(poly))>0 else 0 for poly in polys])
+        pts = polys[(norms*areas).argmax()]
     return pts
 
 
