@@ -14,12 +14,12 @@ This is a small code for solving linear perturbations of stars, which follows th
 - For science backgrounds, also see https://gyre.readthedocs.io/en/stable/.
 
 ### Caveats
-- There is speed optimizations for matrix determinant calculation, but not for matrix construction. This can improve the speed significantly.
+- There are speed optimizations for matrix determinant calculation, but not for matrix construction. This can improve the speed significantly.
 - Jump conditions are not included yet.
 
 ### The demo notebook
 - The notebook can produce Figs. 1, 2 (with `low_viscosity=True`), 3, &4 (with `low_viscosity=False`) of arXiv:2203.11809.
-- The total run time is ~20 min for each, due to lack of optimization.
+- The total run time is ~20 min (Intel Core i7-1065G7) for each, due to lack of optimization.
 
 ### Citations, if it's useful
 https://ui.adsabs.harvard.edu/abs/2022arXiv220311809S/abstract
