@@ -1,5 +1,7 @@
 # polytropic
 
+![Screenshot](sample.png)
+
 This is a small code for solving linear perturbations of stars, which follows the code GYRE (https://gyre.readthedocs.io/en/stable/), but solved complex eigenvalues in a new way. See arXiv:2203.11809.
 
 ### What the code can do
