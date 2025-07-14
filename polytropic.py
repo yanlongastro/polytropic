@@ -123,6 +123,9 @@ def find_theta1(n, theta, x1, x0=-1e-12, num=100000):
 
 class poly:
     def __init__(self, n, A=0., xmax=15., fA=None, qA=None, nu=None, gamma=None):
+        """
+        n : polytropic index
+        """
         sol, imax, x1 = model_solutions(n, x0=-1e-12, x1=xmax, rtol=1e-8, atol=1e-8, A=A, fA=fA, qA=qA)
         #print(sol.t, sol.y, x1)
         self.theta, self.theta_p, self.theta_pp, self.x1 = theta_interp(sol, imax, x1)
@@ -169,12 +172,20 @@ class poly:
 
 const_G = 6.67428e-8
 const_Na = 6.02e23
-const_mu = 1
 const_k = 1.380649e-16
 
 
 class polystar:
-    def __init__(self, p, M, R, L=1., gamma=5./3., f_Om=0):
+    def __init__(self, p, M, R, L=1., gamma=5./3., f_Om=0, mu=1):
+        """
+        p : an instance of the class poly
+        M : stellar mass
+        R : stellar radius
+        L : ??
+        gamma : adiabatic index
+        f_Om: ??
+        mu : mean molecular weight in proton mass
+        """
         theta = p.theta
         theta_p = p.theta_p
         x1 = p.x1
@@ -200,7 +211,7 @@ class polystar:
         self.p_c = 1./(4*np.pi*(n+1)*(mass_factor*x1)**2)*const_G*M**2/R**4
         self.K = self.p_c / self.rho_c**(1+1/n)
         self.r_n = np.sqrt((n+1)*self.p_c/(4*np.pi*const_G*self.rho_c**2))
-        self.T_c = 1/((n+1)*(mass_factor*x1**2)) *const_G*const_mu/(const_Na*const_k) *M/R
+        self.T_c = 1/((n+1)*(mass_factor*x1**2)) *const_G*mu/(const_Na*const_k) *M/R
 
         self.xi = lambda r: r/self.r_n
         self.rho_r = lambda r: self.rho_c*theta(self.xi(r))**n
@@ -214,6 +225,19 @@ class polystar:
         self.c1_r = lambda r: r**3*M/(R**3*self.M_r(r))
         self.Omega2_r = lambda r: fOm2(self.xi(r))*const_G*M/R**3
         self.dlnOmega_dlnr_r = lambda r: np.nan_to_num(qA(self.xi(r)) /2./fA(self.xi(r)))
+
+    def get_rM_interpolator(self, num=2000, normalize=False):
+        """
+        get r(M) function, which is an interpolation from M(r)
+        num : num of interpolation points
+        normalize : r -> r/R, m -> m/M
+        """
+        r = np.logspace(-20, 0, num=num)*self.R
+        m = self.M_r(r)
+        if normalize:
+            r /= r.max()
+            m /= m.max()
+        self.r_M = lambda x: 10**interpolate.InterpolatedUnivariateSpline(np.log10(m), np.log10(r))(np.log10(x))
 
     def write_mesa(self, fname, n_grids=2000, ver=233, eps_l=1e-3, eps_r = 1e-3):
         gamma = self.gamma
